@@ -36,7 +36,7 @@ def handshake():
 def create():
     data = request.get_json(force=True)
     try:
-        name = data['Name']
+        name = data['Name'].replace('_', '--')
         size = data['Opts']['size']
         api_create_volume(
             name=name,
@@ -54,7 +54,7 @@ def create():
 @app.route('/VolumeDriver.Remove', methods=['POST'])
 def remove():
     data = request.get_json(force=True)
-    name = data['Name']
+    name = data['Name'].replace('_', '--')
     try:
         api_delete(name)
         return jsonify(Err='')
@@ -65,7 +65,7 @@ def remove():
 @app.route('/VolumeDriver.Mount', methods=['POST'])
 def mount():
     data = request.get_json(force=True)
-    name = data['Name']
+    name = data['Name'].replace('_', '--')
     id = data['ID']
     try:
         system_mount_volume(name, id)
@@ -77,7 +77,7 @@ def mount():
 @app.route('/VolumeDriver.Path', methods=['POST'])
 def volume_path():
     data = request.get_json(force=True)
-    name = data['Name']
+    name = data['Name'].replace('_', '--')
     if VOLUME_MOUNTS.get(name):
         return jsonify(Mountpoint='/do_volumes/%s' % name, Err='')
     return jsonify(Err='')
@@ -86,7 +86,7 @@ def volume_path():
 @app.route('/VolumeDriver.Unmount', methods=['POST'])
 def unmount():
     data = request.get_json(force=True)
-    name = data['Name']
+    name = data['Name'].replace('_', '--')
     id = data['ID']
     try:
         system_unmount_volume(name, id)
@@ -98,10 +98,10 @@ def unmount():
 @app.route('/VolumeDriver.Get', methods=['POST'])
 def get_volume():
     data = request.get_json(force=True)
-    name = data['Name']
+    name = data['Name'].replace('_', '--')
     try:
         volume = api_get_volume(name)
-        return jsonify(Volume={'Name': volume['name']}, Err='')
+        return jsonify(Volume={'Name': volume['name'].replace('--', '_')}, Err='')
     except (APIException, KeyError):
         return jsonify(Err='%s does not exist' % name)
 
@@ -111,7 +111,7 @@ def list_volumes():
     err = ''
     volumes = []
     try:
-        volumes = [{'name': vol['name']} for vol in api_list_volumes()]
+        volumes = [{'name': vol['name'].replace('--', '_')} for vol in api_list_volumes()]
     except APIException as e:
         err = str(e)
     return jsonify(Volumes=volumes, Err=err)
