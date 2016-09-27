@@ -3,6 +3,7 @@ WORKDIR /app/
 
 RUN apt-get update && apt-get install -y parted
 
-RUN pip install requests flask uwsgi
-COPY digitalocean.py /app/
-CMD uwsgi --http-socket /run/docker/plugins/digitalocean.sock --chdir /app --wsgi-file digitalocean.py --callable app --close-on-exec
+COPY requirements.txt /app/
+RUN pip install -r requirements.txt
+COPY . /app/
+CMD uwsgi --http-socket /run/docker/plugins/digitalocean.sock --chdir /app --wsgi-file wsgi.py --callable app --close-on-exec

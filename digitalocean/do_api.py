@@ -1,12 +1,11 @@
-import os
 import subprocess
 from time import sleep
 
-from flask import Flask, jsonify, request
+from flask import current_app as c
 import requests
 
+from .exceptions import APIException
 
-app = Flask(__name__)
 
 def api_get_metadata():
     response = requests.get('http://169.254.169.254/metadata/v1/id')
@@ -19,119 +18,14 @@ def api_get_metadata():
     region = response.text
     return id, region
 
-DROPLET_ID, REGION = api_get_metadata()
-VOLUME_MOUNTS = {}
-TOKEN = os.environ.get('DIGITAL_OCEAN_TOKEN')
-
-class APIException(Exception):
-    pass
-
-
-@app.route('/Plugin.Activate', methods=['POST'])
-def handshake():
-    return jsonify(Implements=['VolumeDriver'])
-
-
-@app.route('/VolumeDriver.Create', methods=['POST'])
-def create():
-    data = request.get_json(force=True)
-    try:
-        name = data['Name'].replace('_', '--')
-        size = data['Opts']['size']
-        api_create_volume(
-            name=name,
-            size_gigabytes=size,
-            description=data['Opts'].get('desc', '')
-        )
-
-        return jsonify(Err='')
-    except APIException as e:
-        return jsonify(Err=str(e))
-    except KeyError as e:
-        return jsonify(Err='Missing required parameter: %s' % e)
-
-
-@app.route('/VolumeDriver.Remove', methods=['POST'])
-def remove():
-    data = request.get_json(force=True)
-    name = data['Name'].replace('_', '--')
-    try:
-        api_delete(name)
-        return jsonify(Err='')
-    except APIException as e:
-        return jsonify(Err='Failed to remove %s, %s' % (name, e))
-
-
-@app.route('/VolumeDriver.Mount', methods=['POST'])
-def mount():
-    data = request.get_json(force=True)
-    name = data['Name'].replace('_', '--')
-    id = data['ID']
-    try:
-        system_mount_volume(name, id)
-        return jsonify(Mountpoint='/do_volumes/%s' % name, Err='')
-    except APIException as e:
-        return jsonify(Err=str(e))
-
-
-@app.route('/VolumeDriver.Path', methods=['POST'])
-def volume_path():
-    data = request.get_json(force=True)
-    name = data['Name'].replace('_', '--')
-    if VOLUME_MOUNTS.get(name):
-        return jsonify(Mountpoint='/do_volumes/%s' % name, Err='')
-    return jsonify(Err='')
-
-
-@app.route('/VolumeDriver.Unmount', methods=['POST'])
-def unmount():
-    data = request.get_json(force=True)
-    name = data['Name'].replace('_', '--')
-    id = data['ID']
-    try:
-        system_unmount_volume(name, id)
-        return jsonify(Err='')
-    except APIException as e:
-        return jsonify(Err=str(e))
-
-
-@app.route('/VolumeDriver.Get', methods=['POST'])
-def get_volume():
-    data = request.get_json(force=True)
-    name = data['Name'].replace('_', '--')
-    try:
-        volume = api_get_volume(name)
-        return jsonify(Volume={'Name': volume['name'].replace('--', '_')}, Err='')
-    except (APIException, KeyError):
-        return jsonify(Err='%s does not exist' % name)
-
-
-@app.route('/VolumeDriver.List', methods=['POST'])
-def list_volumes():
-    err = ''
-    volumes = []
-    try:
-        volumes = [{'name': vol['name'].replace('--', '_')} for vol in api_list_volumes()]
-    except APIException as e:
-        err = str(e)
-    return jsonify(Volumes=volumes, Err=err)
-
-
-@app.route('/VolumeDriver.Capabilities', methods=['POST'])
-def capabilities():
-    return jsonify(Capabilities={
-        "Scope": "global"
-    })
-
-
 def send_request(endpoint, method, data=None, params=None):
     base = 'https://api.digitalocean.com'
-    headers = {'Authorization': 'Bearer %s' % TOKEN, 'Content-Type': 'application/json'}
+    headers = {'Authorization': 'Bearer %s' % c.config['TOKEN'], 'Content-Type': 'application/json'}
     return method(base + endpoint, headers=headers, json=data, params=params)
 
 
 def api_get_volume(name):
-    params = {'name': name, 'region': REGION}
+    params = {'name': name, 'region': c.config['REGION']}
     response = send_request('/v2/volumes', requests.get, params=params)
     if not response.status_code == 200:
         raise APIException()
@@ -151,7 +45,7 @@ def api_create_volume(name, size_gigabytes, description):
         'name': name,
         'size_gigabytes': size_gigabytes,
         'description': description,
-        'region': REGION
+        'region': c.config['REGION']
     }
 
     response = send_request('/v2/volumes', requests.post, data=data)
@@ -171,9 +65,9 @@ def api_create_volume(name, size_gigabytes, description):
 def api_mount_volume(name):
     data = {
         'type': 'attach',
-        'droplet_id': DROPLET_ID,
+        'droplet_id': c.config['DROPLET_ID'],
         'volume_name': name,
-        'region': REGION
+        'region': c.config['REGION']
     }
     response = send_request('/v2/volumes/actions', requests.post, data=data)
     if not response.status_code == 202:
@@ -190,13 +84,14 @@ def api_mount_volume(name):
         raise APIException('Failed to attach Volume')
 
 
-def api_unmount_volume(name, droplet_id=DROPLET_ID):
-
+def api_unmount_volume(name, droplet_id=None):
+    if droplet_id is None:
+        droplet_id = c.config['DROPLET_ID']
     data = {
         'type': 'detach',
         'droplet_id': droplet_id,
         'volume_name': name,
-        'region': REGION
+        'region': c.config['REGION']
     }
     response = send_request('/v2/volumes/actions', requests.post, data=data)
     if not response.status_code == 202:
@@ -214,7 +109,7 @@ def api_unmount_volume(name, droplet_id=DROPLET_ID):
 
 
 def api_delete(name):
-    params = {'name': name, 'region': REGION}
+    params = {'name': name, 'region': c.config['REGION']}
     vol = api_get_volume(name)
     if len(vol.get('droplet_ids', [])):
         raise APIException('Volume is already attached')
@@ -225,12 +120,12 @@ def api_delete(name):
 
 
 def system_mount_volume(name, id):
-    if VOLUME_MOUNTS.get(name):
-        VOLUME_MOUNTS[name].append(id)
+    if c.config['VOLUME_MOUNTS'].get(name):
+        c.config['VOLUME_MOUNTS'][name].append(id)
         return
     vol = api_get_volume(name)
     if len(vol.get('droplet_ids', [])):
-        if str(vol.get('droplet_ids')[0]) == str(DROPLET_ID):
+        if str(vol.get('droplet_ids')[0]) == str(c.config['DROPLET_ID']):
             perform_mount(name)
             return
         raise APIException('Volume is already attached to another Droplet')
@@ -249,13 +144,13 @@ def perform_mount(name):
     except subprocess.CalledProcessError:
         subprocess.check_output('mount -t ext4 -o rw,rshared %s-part1  /do_volumes/%s' % (dev, name),
                             shell=True)
-    VOLUME_MOUNTS[name] = [id]
+    c.config['VOLUME_MOUNTS'][name] = [id]
 
 
 def system_unmount_volume(name, id):
-    if VOLUME_MOUNTS.get(name):
-        VOLUME_MOUNTS.get(name).remove(id)
-    if not VOLUME_MOUNTS.get(name):
+    if c.config['VOLUME_MOUNTS'].get(name):
+        c.config['VOLUME_MOUNTS'].get(name).remove(id)
+    if not c.config['VOLUME_MOUNTS'].get(name):
         try:
             subprocess.check_output('umount -d /dev/disk/by-id/scsi-0DO_Volume_%s-part1' % name, shell=True)
         except subprocess.CalledProcessError as e:
